@@ -1,0 +1,55 @@
+# Keeps this fork in step with Oksii/legacy-configs and keeps the FatBoss Lua
+# module (luascripts/fatboss.lua) on every config's lua_modules line.
+#
+# Runs daily and on demand. Oksii's side wins any merge conflict; the FatBoss
+# additions are re-applied afterwards, so his stats.lua and combinedfixes.lua
+# updates arrive unchanged.
+name: FatBoss sync from Oksii
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fatboss-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream and keep the FatBoss module
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Oksii/legacy-configs.git
+          git fetch --no-tags upstream main etl-stats-api
+          for branch in main etl-stats-api; do
+            git checkout -B "$branch" "origin/$branch"
+            if ! git merge --no-edit "upstream/$branch"; then
+              conflicts=$(git diff --name-only --diff-filter=U)
+              while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                git checkout --theirs -- "$f" && git add -- "$f" || git rm -q -- "$f"
+              done <<< "$conflicts"
+              git commit --no-edit
+            fi
+            for f in configs/*.config; do
+              grep -q 'setl[[:space:]]*lua_modules' "$f" || continue
+              grep -q 'luascripts/fatboss.lua' "$f" && continue
+              sed -i -E 's#(setl[[:space:]]+lua_modules[[:space:]]+"[^"]*)"#\1 luascripts/fatboss.lua"#' "$f"
+            done
+            git add configs
+            git diff --cached --quiet || git commit -m "FatBoss: keep luascripts/fatboss.lua in lua_modules"
+            git push origin "$branch"
+          done
